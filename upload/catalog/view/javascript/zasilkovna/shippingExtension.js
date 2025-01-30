@@ -6,10 +6,12 @@ $(function() {
 		urls: {
 			standard: /checkout\/shipping_method$/,
 			journal3: /journal3\/checkout/,
+			d_quickcheckout: /d_quickcheckout.tag/,
 		},
 		buttons: {
 			standard: '#button-shipping-method',
-			journal3: '#quick-checkout-button-confirm'
+			journal3: '#quick-checkout-button-confirm',
+			d_quickcheckout: 'div[data-is="qc_confirm"] a.btn-primary'
 		},
 	};
 
@@ -17,6 +19,8 @@ $(function() {
 	var loadSelectedBranchDebounced = debounce(loadSelectedBranch, 1000);
 
 	var selectedPickupPoints = {};
+
+	var appCartType = null;
 
 	/**
 	 * Initialization of all required parts.
@@ -26,13 +30,23 @@ $(function() {
 		var isFetchShippingMethodUrl = false;
 		for (var cartType in cartsConfig['urls']) {
 			if (settings.url.match(cartsConfig['urls'][cartType]) !== null) {
-				isFetchShippingMethodUrl = true;
+				appCartType = cartType;
+				isFetchShippingMethodUrl = (appCartType === 'd_quickcheckout' ? false : true);
 				break;
 			}
 		}
 
 		if (! isFetchShippingMethodUrl) {
-			return;
+			if ((settings.url.match('extension/d_quickcheckout/shipping_method/update') || settings.url.match('extension/d_quickcheckout/cart/update'))
+				&& typeof xhr.responseJSON !== typeof undefined && xhr.responseJSON !== null
+				&& typeof xhr.responseJSON.session !== typeof undefined && xhr.responseJSON.session !== null
+				&& typeof xhr.responseJSON.session.shipping_method !== typeof undefined && xhr.responseJSON.session.shipping_method !== null
+				&& typeof xhr.responseJSON.session.shipping_method.text !== typeof undefined && xhr.responseJSON.session.shipping_method.text !== null
+			) {
+				$('#shipping_method_list label[for="'+xhr.responseJSON.session.shipping_method.code+'"] span.price').html(xhr.responseJSON.session.shipping_method.text);
+			} else {
+				return;
+			}
 		}
 
 		// Journal3: calls checkout/save both after shipping method selection (we don't need to reinit) and country change (we need to reinit)
@@ -53,6 +67,52 @@ $(function() {
 		initializeWidgetButtons(widgetConfig);
 		loadSelectedBranchDebounced();
 	});
+
+	const onChangeElement = (qSelector, cb)=>{
+		const targetNode = document.querySelector(qSelector);
+		if (targetNode){
+			const config = { attributes: true, childList: true, subtree: true };
+			const callback = function(mutationsList, observer) {
+				cb($(qSelector))
+			};
+			const observer = new MutationObserver(callback);
+			observer.observe(targetNode, config);
+		} else {
+			console.error("onChangeElement: Invalid Selector")
+		}
+	}
+
+	onChangeElement('#content', function(jqueryElement){
+		if ((appCartType === null || appCartType === 'd_quickcheckout') && $('#d_quickcheckout').length > 0) {
+			FixDQuickcheckout();
+		}
+	});
+
+	/**
+	 * Add support for AJAX Quick Checkout FREE (d_quickcheckout).
+	 */
+	function FixDQuickcheckout() {
+		$('#shipping_method_list label[for*=zasilkovna] span.price').each(function() {
+			if ($(this).html().match(/&lt;/) !== null) {
+				$(this).html($(this).text());
+
+				$('.packeta-shipping-item-envelope').remove();
+				selectedPickupPoints = {};
+
+				var $vendorWidgetConfigs = findVendorWidgetConfig();
+				if ($vendorWidgetConfigs.length === 0) {
+					return;
+				}
+
+				var widgetConfig = $('#packeta-widget-config').data();
+
+				addWidgetButtons(widgetConfig, $vendorWidgetConfigs);
+				registerOnShippingMethodChangeListener();
+				initializeWidgetButtons(widgetConfig);
+				loadSelectedBranchDebounced();
+			}
+		});
+	}
 
 	function findVendorWidgetConfig($parentElement = null) {
 		var selector = '.packeta-vendor-widget-config';
@@ -237,6 +297,11 @@ $(function() {
 			var $element = $(cartsConfig['buttons'][cartType]);
 			if ($element.length) {
 				$element.attr('disabled', isDisabled);
+				if (isDisabled) {
+					$element.addClass('disabled');
+				} else {
+					$element.removeClass('disabled');
+				}
 				return;
 			}
 		}
@@ -267,6 +332,8 @@ $(function() {
 		$.ajax({
 			url: 'index.php?route=extension/module/zasilkovna/loadSelectedBranch',
 			type: 'get',
+			async: false,
+			cache: false,
 			dataType: 'json',
 			success: function(response) {
 				if (response.zasilkovna_branch_id !== '') {
@@ -282,7 +349,6 @@ $(function() {
 
 					showPickupPointDescription(shippingMethod, selectedBranch.branchDescription);
 				}
-
 				updateSubmitButtonStatus();
 			},
 			error: function(xhr, ajaxOptions, thrownError) {
@@ -310,6 +376,8 @@ $(function() {
 		$.ajax({
 			url: 'index.php?route=extension/module/zasilkovna/saveSelectedBranch',
 			type: 'post',
+			async: false,
+			cache: false,
 			data: dataToSend,
 			success: function() {
 				updateSubmitButtonStatus();
